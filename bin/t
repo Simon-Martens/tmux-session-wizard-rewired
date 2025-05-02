@@ -21,6 +21,12 @@ else
     RESULT=$(tmux list-sessions -F "#{session_last_attached} #{session_name}: #{session_windows} window(s)\
 #{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}#{?session_attached, (attached),}")
   fi
+  
+  # New: add current directory option, if running outside of tmux
+  if [ -z "$TMUX" ]; then
+    RESULT=$(echo "[CURRENT]"; echo "$RESULT")
+  fi
+
   QUERY_AND_RESULT=$( (
     echo "$RESULT" |
       sort -r | (if [ -n "$TMUX" ]; then grep -v " $(tmux display-message -p '#S'):"; else cat; fi) | cut -d' ' -f2-
@@ -35,6 +41,44 @@ else
 
   QUERY=$(echo "$QUERY_AND_RESULT" | head -n 1)
   RESULT=$(echo "$QUERY_AND_RESULT" | tail -n 1)
+
+  # New: Current directory option
+  if [ "$RESULT" == "[CURRENT]" ]; then
+    if [ -n "$TMUX" ]; then
+      DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
+    else
+      DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
+    fi
+
+    DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
+
+    if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
+      echo "Attaching to existing '$DEFAULT_SESSION' session."
+    else
+      tmux new-session -d -s "$DEFAULT_SESSION" -c "$DIR_FULL"
+      tmux set-option -t "$DEFAULT_SESSION" @project-folder "$DIR_FULL"
+      echo "Created new '$DEFAULT_SESSION' session at $DIR_FULL."
+    fi
+
+    SESSION="$DEFAULT_SESSION"
+
+    if [ -z "$TMUX" ]; then
+      if [ -n "$SESSION_WIZARD_INTEGRATION_TEST" ]; then
+        echo "Running integrtion test, so not attaching to tmux session"
+      else
+        tmux attach -t "$SESSION"
+      fi
+    else
+      tmux switch-client -t "$SESSION"
+    fi
+
+    if [ -n "$WINDOW" ]; then
+      tmux select-window -t "$SESSION:$WINDOW"
+    fi
+
+    exit 0;
+  fi
+
 
   # NEW: default session if nothing was entered and nothing was selected
   if [ -z "$QUERY" ] && [ -z "$RESULT" ]; then
