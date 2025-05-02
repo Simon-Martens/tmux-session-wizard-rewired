@@ -21,14 +21,49 @@ else
     RESULT=$(tmux list-sessions -F "#{session_last_attached} #{session_name}: #{session_windows} window(s)\
 #{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}#{?session_attached, (attached),}")
   fi
-  RESULT=$( (
+  QUERY_AND_RESULT=$( (
     echo "$RESULT" |
       sort -r | (if [ -n "$TMUX" ]; then grep -v " $(tmux display-message -p '#S'):"; else cat; fi) | cut -d' ' -f2-
     zoxide query -l | sed -e "$HOME_REPLACER"
-  ) | $(__fzfcmd) --reverse --print-query --tiebreak=index | tail -n 1)
+  ) | $(__fzfcmd) --reverse --print-query --tiebreak=index)
+
+  QUERY=$(echo "$QUERY_AND_RESULT" | head -n 1)
+  RESULT=$(echo "$QUERY_AND_RESULT" | tail -n 1)
+
   if [ -z "$RESULT" ]; then
     exit 0
   fi
+
+
+  if [ "$RESULT" == "$QUERY" ]; then
+    # User filtered but no match found; create new session with query name
+    NEW_SESSION_NAME=$(echo "$QUERY" | _normalize)
+    
+    # Check if session already exists
+    if tmux has-session -t="$NEW_SESSION_NAME" 2>/dev/null; then
+      echo "Session '$NEW_SESSION_NAME' already exists."
+    else
+      DIR_FULL=$(pwd)
+      tmux new-session -d -s "$NEW_SESSION_NAME" -c "$DIR_FULL"
+    fi
+
+    SESSION="$NEW_SESSION_NAME"
+
+    if [ -z "$TMUX" ]; then
+      if [ -n "$SESSION_WIZARD_INTEGRATION_TEST" ]; then
+        echo "Running integrtion test, so not attaching to tmux session"
+      else
+        tmux attach -t "$SESSION"
+      fi
+    else
+      tmux switch-client -t "$SESSION"
+    fi
+
+    if [ -n "$WINDOW" ]; then
+      tmux select-window -t "$SESSION:$WINDOW"
+    fi
+  fi
+
 fi
 
 # Makes sure tmux is running in order to get all the correct tmux options below. Gets cleaned at the bottom
