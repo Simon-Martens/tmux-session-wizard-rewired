@@ -12,6 +12,14 @@ if [ "$*" ]; then
   eval "$(zoxide init bash)"
   RESULT=$(z "$*" && pwd)
 else
+  # Get the current directory
+  if [ -n "$TMUX" ]; then
+    DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
+  else
+    DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
+  fi
+  DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
+
   # No argument is given. Use FZF
   SELECT_WINDOW=$(get_tmux_option "@session-wizard-windows" "off")
   if [ "$SELECT_WINDOW" == "on" ]; then
@@ -22,9 +30,21 @@ else
 #{?session_grouped, (group ,}#{session_group}#{?session_grouped,),}#{?session_attached, (attached),}")
   fi
   
-  # New: add current directory option, if running outside of tmux
+  # New: add current directory option, if running outside of tmux, or attaching to a session, if it exists
   if [ -z "$TMUX" ]; then
-    RESULT=$(echo "[CURRENT]"; echo "$RESULT")
+    if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
+      echo "Attaching to existing '$DEFAULT_SESSION' session."
+      SESSION="$DEFAULT_SESSION"
+      tmux attach -t "$SESSION"
+
+      if [ -n "$WINDOW" ]; then
+        tmux select-window -t "$SESSION:$WINDOW"
+      fi
+
+      exit 0
+    else
+      RESULT=$(echo "[CURRENT]"; echo "$RESULT")
+    fi
   fi
 
   QUERY_AND_RESULT=$( (
@@ -44,14 +64,6 @@ else
 
   # New: Current directory option
   if [ "$RESULT" == "[CURRENT]" ]; then
-    if [ -n "$TMUX" ]; then
-      DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
-    else
-      DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
-    fi
-
-    DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
-
     if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
       echo "Attaching to existing '$DEFAULT_SESSION' session."
     else
@@ -79,15 +91,8 @@ else
     exit 0;
   fi
 
-
   # NEW: default session if nothing was entered and nothing was selected
   if [ -z "$QUERY" ] && [ -z "$RESULT" ]; then
-    if [ -n "$TMUX" ]; then
-      DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
-    else
-      DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
-    fi
-
     DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
 
     if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
@@ -121,12 +126,6 @@ else
     exit 0
   fi
 
-  # Get the current directory
-  if [ -n "$TMUX" ]; then
-    DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
-  else
-    DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
-  fi
 
   # NEW: Handle the case where no session is found, but a query was given
   if [ "$RESULT" == "$QUERY" ]; then
