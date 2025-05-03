@@ -5,25 +5,14 @@ source "$CURRENT_DIR/../src/helpers.sh"
 
 # Get the current directory
 if [ -n "$TMUX" ]; then
-  DIR_FULL=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
+  DIR_FULL_UNESCAPED=$(tmux display-message -p "#{pane_current_path}" 2>/dev/null || echo "$HOME")
 else
-  DIR_FULL=$(pwd 2>/dev/null || echo "$HOME")
-fi
-DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
-
-# Makes sure tmux is running in order to get all the correct tmux options below. Gets cleaned at the bottom
-if ! tmux info &>/dev/null; then
-  TMP_SESSION_DIR=$(mktemp -d)
-  TMP_SESSION_NAME=$(session_name --full-path "$TMP_SESSION_DIR")
-  # Allow for custom tmux config (mostly for testing)
-  if [ -n "$SESSION_WIZARD_INTEGRATION_TEST" ]; then
-    tmux -f "$TMUX_CONFIG" new-session -d -s "$TMP_SESSION_NAME" -c "$TMP_SESSION_DIR"
-  else
-    tmux new-session -d -s "$TMP_SESSION_NAME" -c "$TMP_SESSION_DIR"
-  fi
+  DIR_FULL_UNESCAPED=$(pwd 2>/dev/null || echo "$HOME")
 fi
 
-# No argument is given. Use FZF
+DEFAULT_SESSION=$(basename "$DIR_FULL_UNESCAPED" | _normalize)
+DIR_FULL=$(echo "$DIR_FULL_UNESCAPED" | sed -e "$TILDE_REPLACER")
+
 SELECT_WINDOW=$(get_tmux_option "@session-wizard-windows" "off")
 if [ "$SELECT_WINDOW" == "on" ]; then
   RESULT=$(tmux list-windows -a -F "#{session_last_attached} #{session_name}: #{window_name}(#{window_index})\
@@ -50,45 +39,29 @@ QUERY_AND_RESULT=$( (
 
 FZF_EXIT=$?
 if [ $FZF_EXIT -eq 130 ]; then
-  clean_up
   exit 0
 fi
 
 QUERY=$(echo "$QUERY_AND_RESULT" | head -n 1)
 RESULT=$(echo "$QUERY_AND_RESULT" | tail -n 1)
 
-# Current directory option was selected
-if [[ "$RESULT" == "[New]"* ]] || [[ "$RESULT" == "[Existing]"* ]]; then
-  if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
-    echo "Attaching to existing '$DEFAULT_SESSION' session."
-  else
-    tmux new-session -d -s "$DEFAULT_SESSION" -c "$DIR_FULL"
-    tmux set-option -t "$DEFAULT_SESSION" @project-folder "$DIR_FULL"
-    echo "Created new '$DEFAULT_SESSION' session at $DIR_FULL."
-  fi
-
-  SESSION="$DEFAULT_SESSION"
-
+# Current directory option was selected OR
 # Nothing was entered and nothing was selected: default session
-elif [ -z "$QUERY" ] && [ -z "$RESULT" ]; then
-  DEFAULT_SESSION=$(basename "$DIR_FULL" | _normalize)
-
-  if tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
-    echo "Attaching to existing '$DEFAULT_SESSION' session."
-  else
+if [[ "$RESULT" == "[New]"* ]] || [[ "$RESULT" == "[Existing]"* ]] || [[ -z "$QUERY" && -z "$RESULT" ]]; then
+  if ! tmux has-session -t="$DEFAULT_SESSION" 2>/dev/null; then
     tmux new-session -d -s "$DEFAULT_SESSION" -c "$DIR_FULL"
     tmux set-option -t "$DEFAULT_SESSION" @project-folder "$DIR_FULL"
-    echo "Created new '$DEFAULT_SESSION' session at $DIR_FULL."
   fi
 
   SESSION="$DEFAULT_SESSION"
 
 # Nothing was given, name is also empty
+# This case probably doesn't happen, but just in case
 elif [ -z "$RESULT" ]; then
-  clean_up
   exit 0
 
-# Nothing found, but a query given, or :Query: create new
+# Nothing found, but a query given, OR 
+# :Query - create new session with that name
 elif [ "$RESULT" == "$QUERY" ] || [[ "$QUERY" == :* ]]; then
   if [[ "$QUERY" == :* ]]; then
     QUERY=${QUERY:1}
@@ -97,9 +70,7 @@ elif [ "$RESULT" == "$QUERY" ] || [[ "$QUERY" == :* ]]; then
   NEW_SESSION_NAME=$(echo "$QUERY" | _normalize)
   
   # Check if session already exists
-  if tmux has-session -t="$NEW_SESSION_NAME" 2>/dev/null; then
-    echo "Session '$NEW_SESSION_NAME' already exists."
-  else
+  if ! tmux has-session -t="$NEW_SESSION_NAME" 2>/dev/null; then
     tmux new-session -d -s "$NEW_SESSION_NAME" -c "$DIR_FULL"
     tmux set-option -t "$NEW_SESSION_NAME" @project-folder "$DIR_FULL"
   fi
@@ -108,36 +79,32 @@ elif [ "$RESULT" == "$QUERY" ] || [[ "$QUERY" == :* ]]; then
   
 # Session selected
 elif [[ $RESULT == *":"* ]]; then
-  # RESULT comes from list-sessions or list-windows
   SESSION=$(echo "$RESULT" | awk '{print $1}')
   SESSION=${SESSION//:/}
   if [ "$SELECT_WINDOW" == "on" ]; then
     WINDOW=$(echo "$RESULT" | awk -F"[()]" '{print $(NF-1)}')
   fi
 
-  # Path selected
+# Path selected
 else
   DIR_FULL=$(echo "$RESULT" | sed -e "$TILDE_REPLACER")
   DIR_WITH_TILDE=$(echo "$RESULT" | sed -e "$HOME_REPLACER") # in case it came from a direct usage of `t <path>`
 
   # Quit if directory does not exists
   if [ ! -d "$DIR_FULL" ]; then
-    clean_up
     exit 0
   fi
 
   # Promote rank in zoxide.
   zoxide add "$DIR_FULL"
 
-  MODE=$(get_tmux_option "@session-wizard-mode" "directory")
-  SESSION=$(session_name --"$MODE" "$DIR_WITH_TILDE")
+  SESSION=$(basename "$DIR_WITH_TILDE" | _normalize)
 
   if ! tmux has-session -t="$SESSION" 2>/dev/null; then
     tmux new-session -d -s "$SESSION" -c "$DIR_FULL"
   fi
 fi
 
-clean_up
 
 # Attach to session
 # Escape tilde which if it appears by itself, tmux will interpret as a marked target
