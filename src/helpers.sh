@@ -2,6 +2,14 @@ _normalize() {
   cat | tr ' .:' '-' | tr '[:upper:]' '[:lower:]'
 }
 
+function clean_up() {
+  # Clean up tmp session
+  if [[ -n "$TMP_SESSION_NAME" ]]; then
+    tmux kill-session -t "$TMP_SESSION_NAME" 2>/dev/null
+    rm -rf "$TMP_SESSION_DIR"
+  fi
+}
+
 # helper functions
 get_tmux_option() {
   local option="$1"
